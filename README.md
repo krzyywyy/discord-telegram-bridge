@@ -54,6 +54,22 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Windows autostart
+
+If you want the bridge to start automatically when you log in (Windows), run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/install_autostart.ps1
+```
+
+This installs a small file in your Startup folder that launches the bridge in the background and writes logs to `data/bridge.log`.
+
+To remove autostart:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/uninstall_autostart.ps1
+```
+
 ## Discord setup (Developer Portal)
 
 1. Go to Discord Developer Portal → **Applications** → **New Application**
@@ -140,4 +156,3 @@ Both paths can be overridden via `.env`:
 ## License
 
 MIT (see `LICENSE`).
-

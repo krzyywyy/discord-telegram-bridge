@@ -44,6 +44,36 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ[key] = value
 
 
+def acquire_single_instance_lock(lock_path: str | Path):
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fp = lock_path.open("a+", encoding="utf-8")
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(fp.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:  # pragma: no cover (platform-specific)
+                raise RuntimeError("Another instance is already running.") from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:  # pragma: no cover (platform-specific)
+                raise RuntimeError("Another instance is already running.") from exc
+
+        fp.seek(0)
+        fp.truncate()
+        fp.write(str(os.getpid()))
+        fp.flush()
+        return fp
+    except Exception:
+        fp.close()
+        raise
+
+
 def split_text(text: str, limit: int) -> list[str]:
     text = text.strip()
     if not text:
@@ -472,6 +502,8 @@ async def run() -> None:
 
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     discord_token = os.environ.get("DISCORD_TOKEN")
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -481,11 +513,18 @@ async def run() -> None:
 
     config_path = os.environ.get("CONFIG_PATH", "data/config.json")
     db_path = os.environ.get("DB_PATH", "data/message_map.sqlite3")
+    lock_path = Path(db_path).with_suffix(".lock")
     guild_id_raw = os.environ.get("DISCORD_GUILD_ID", "").strip()
     guild_id = int(guild_id_raw) if guild_id_raw else None
 
     config = BridgeConfig(config_path)
     await config.load()
+
+    try:
+        lock_handle = acquire_single_instance_lock(lock_path)
+    except RuntimeError:
+        logging.error("Bridge is already running. Exiting.")
+        return
 
     store = MessageStore(db_path)
     await store.open()
@@ -517,6 +556,10 @@ async def run() -> None:
             await telegram_app.updater.stop()
             await telegram_app.stop()
             await store.close()
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
