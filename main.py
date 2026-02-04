@@ -47,24 +47,52 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 def acquire_single_instance_lock(lock_path: str | Path):
     lock_path = Path(lock_path)
+
+    if os.name == "nt":
+        import ctypes
+        import hashlib
+
+        class _WindowsMutex:
+            def __init__(self, kernel32, handle) -> None:
+                self._kernel32 = kernel32
+                self._handle = handle
+
+            def close(self) -> None:
+                if not self._handle:
+                    return
+                try:
+                    self._kernel32.ReleaseMutex(self._handle)
+                except Exception:
+                    pass
+                try:
+                    self._kernel32.CloseHandle(self._handle)
+                finally:
+                    self._handle = None
+
+        resolved = str(lock_path.resolve()).encode("utf-8")
+        digest = hashlib.sha256(resolved).hexdigest()[:16]
+        name = f"Local\\DiscordTelegramBridge_{digest}"
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.CreateMutexW(None, True, name)
+        if not handle:
+            raise OSError("CreateMutexW failed")
+        last_error = ctypes.get_last_error()
+        # ERROR_ALREADY_EXISTS = 183
+        if last_error == 183:
+            kernel32.CloseHandle(handle)
+            raise RuntimeError("Another instance is already running.")
+        return _WindowsMutex(kernel32, handle)
+
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fp = lock_path.open("a+", encoding="utf-8")
     try:
-        fp.seek(0)
-        if os.name == "nt":
-            import msvcrt
+        import fcntl
 
-            try:
-                msvcrt.locking(fp.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc:  # pragma: no cover (platform-specific)
-                raise RuntimeError("Another instance is already running.") from exc
-        else:
-            import fcntl
-
-            try:
-                fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:  # pragma: no cover (platform-specific)
-                raise RuntimeError("Another instance is already running.") from exc
+        try:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:  # pragma: no cover (platform-specific)
+            raise RuntimeError("Another instance is already running.") from exc
 
         fp.seek(0)
         fp.truncate()
