@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from telegram import Update
 from telegram.constants import ChatType
+from telegram.error import BadRequest, Forbidden
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -201,9 +202,9 @@ class BridgeDiscordClient(discord.Client):
                 return
             added = await self._config.add_discord_channel(bridge, channel.id)
             msg = (
-                f"Added this channel to bridge `{bridge}`."
+                f"Added this channel (<#{channel.id}>) to bridge `{bridge}`."
                 if added
-                else f"This channel is already in bridge `{bridge}`."
+                else f"This channel (<#{channel.id}>) is already in bridge `{bridge}`."
             )
             await interaction.response.send_message(msg, ephemeral=True)
 
@@ -219,9 +220,9 @@ class BridgeDiscordClient(discord.Client):
                 return
             removed = await self._config.remove_discord_channel(bridge, channel.id)
             msg = (
-                f"Removed this channel from bridge `{bridge}`."
+                f"Removed this channel (<#{channel.id}>) from bridge `{bridge}`."
                 if removed
-                else f"This channel is not in bridge `{bridge}`."
+                else f"This channel (<#{channel.id}>) is not in bridge `{bridge}`."
             )
             await interaction.response.send_message(msg, ephemeral=True)
 
@@ -335,9 +336,25 @@ class BridgeDiscordClient(discord.Client):
         results = await asyncio.gather(
             *(send_one(chat_id) for chat_id in tg_chat_ids), return_exceptions=True
         )
-        for res in results:
+        for chat_id, res in zip(tg_chat_ids, results):
             if isinstance(res, Exception):
-                logging.exception("Discord→Telegram relay error: %s", res)
+                logging.error(
+                    "Discord→Telegram send failed (bridge=%s chat_id=%s): %s",
+                    bridge,
+                    chat_id,
+                    res,
+                    exc_info=(type(res), res, res.__traceback__),
+                )
+                if isinstance(res, BadRequest) and "Chat not found" in str(res):
+                    logging.error(
+                        "Telegram chat_id=%s is not accessible. Make sure the Telegram bot is in that chat and run /here again.",
+                        chat_id,
+                    )
+                if isinstance(res, Forbidden):
+                    logging.error(
+                        "Telegram send forbidden for chat_id=%s. Check bot permissions in that chat (and that the bot wasn't removed).",
+                        chat_id,
+                    )
 
     async def send_telegram_to_discord(
         self,
@@ -402,9 +419,15 @@ class BridgeDiscordClient(discord.Client):
         results = await asyncio.gather(
             *(send_one(cid) for cid in discord_channel_ids), return_exceptions=True
         )
-        for res in results:
+        for channel_id, res in zip(discord_channel_ids, results):
             if isinstance(res, Exception):
-                logging.exception("Telegram→Discord relay error: %s", res)
+                logging.error(
+                    "Telegram→Discord send failed (bridge=%s channel_id=%s): %s",
+                    bridge,
+                    channel_id,
+                    res,
+                    exc_info=(type(res), res, res.__traceback__),
+                )
 
 
 async def build_telegram_app(
@@ -420,9 +443,9 @@ async def build_telegram_app(
         bridge = normalize_bridge_name(context.args[0] if context.args else "default")
         added = await config.add_telegram_chat(bridge, update.effective_chat.id)
         msg = (
-            f"Added this chat to bridge '{bridge}'."
+            f"Added this chat (id={update.effective_chat.id}) to bridge '{bridge}'."
             if added
-            else f"This chat is already in bridge '{bridge}'."
+            else f"This chat (id={update.effective_chat.id}) is already in bridge '{bridge}'."
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
@@ -432,9 +455,9 @@ async def build_telegram_app(
         bridge = normalize_bridge_name(context.args[0] if context.args else "default")
         removed = await config.remove_telegram_chat(bridge, update.effective_chat.id)
         msg = (
-            f"Removed this chat from bridge '{bridge}'."
+            f"Removed this chat (id={update.effective_chat.id}) from bridge '{bridge}'."
             if removed
-            else f"This chat is not in bridge '{bridge}'."
+            else f"This chat (id={update.effective_chat.id}) is not in bridge '{bridge}'."
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg)
 
