@@ -50,6 +50,7 @@ def acquire_single_instance_lock(lock_path: str | Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fp = lock_path.open("a+", encoding="utf-8")
     try:
+        fp.seek(0)
         if os.name == "nt":
             import msvcrt
 
